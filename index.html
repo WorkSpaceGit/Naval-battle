@@ -1,0 +1,952 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Морський бій</title>
+<style>
+  :root{
+    --bg:#0475E6; --panel:#0353B3; --accent:#0A9EFF; --text:#DBEBFB;
+    --sunk:#7A1F1F; --sunk-border:#FF8080;
+  }
+  html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+  body{
+    background:var(--bg);
+    color:var(--text);
+    display:flex;
+    gap:8px;
+    padding:10px;
+    box-sizing:border-box;
+    user-select:none;
+    align-items:flex-start;
+  }
+
+  .player {
+    width:calc(50% - 12px);
+    box-sizing:border-box;
+    padding:8px;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:10px;
+  }
+
+  .panel {
+    background:var(--panel);
+    border:2px solid var(--accent);
+    padding:8px;
+    border-radius:8px;
+    width:100%;
+    box-sizing:border-box;
+  }
+
+  .info { font-weight:700; margin-bottom:8px; text-align:center; }
+  .status { min-height:22px; margin-top:8px; text-align:center; font-weight:600; color:var(--text);}
+
+  .grid {
+    display:grid;
+    grid-template-columns: repeat(14, 1fr);
+    gap:3px;
+    width:100%;
+    aspect-ratio:1;
+    max-width:680px;
+    margin:0 auto;
+    user-select:none;
+    touch-action: manipulation;
+    position:relative;
+  }
+
+  .cell {
+    background: #0669C9;
+    border-radius:4px;
+    aspect-ratio:1;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-weight:700;
+    color: transparent;
+    font-size:14px;
+    line-height:1;
+    border:1px solid rgba(10,158,255,0.18);
+  }
+  .cell.coord { background: transparent; color:var(--text); font-weight:600; }
+
+  /* states */
+  .cell.water { background:#0669C9; color:transparent; }
+  .cell.ship { background:#0A9EFF; color:transparent; } /* visible to owner */
+  .cell.hidden { background:#0669C9; color:transparent; } /* hidden ship */
+  .cell.hit { background:#D14949; color:var(--text); } /* shows X */
+  .cell.miss { background:#DBEBFB; color:#0475E6; } /* shows o */
+  .cell.sunk { background: var(--sunk); border:2px solid var(--sunk-border); color:var(--text); } /* sunk ship */
+
+  .controls { display:flex; gap:8px; justify-content:center; margin-top:8px; flex-wrap:wrap;}
+  button{background:var(--accent); color:var(--text); border:none; padding:8px 12px; border-radius:6px; font-weight:700; cursor:pointer;}
+  button:disabled{opacity:.5; cursor:default; background:#0353B3;}
+  .rotate-info { font-size:13px; margin-top:6px; color:#A9D0FF; text-align:center; }
+
+  /* radar small (under each player) */
+  .radar {
+    width:100%;
+    max-width:320px;
+    padding:8px;
+    box-sizing:border-box;
+    background:linear-gradient(180deg,#024b86,#013f74);
+    border-radius:12px;
+    border:2px solid #0A9EFF;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:8px;
+  }
+  .radar-title { font-weight:800; color:var(--text); font-size:14px; text-align:center; }
+  .radar-container {
+    position:relative;
+    width:210px;   /* зменшено на 25% (було 280) */
+    height:210px;  /* зменшено на 25% (було 280) */
+    background:#0353B3;
+    border-radius:50%;
+    overflow:hidden;
+    display:block;
+    clip-path: circle(50% at 50% 50%); /* вся сітка обрізається кругом */
+  }
+  .r-cell {
+    position:absolute;
+    box-sizing:border-box;
+    border:1px solid rgba(10,158,255,0.25);
+    background:#024b86;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-weight:bold;
+    color:transparent;
+    font-size:11px;
+    line-height:1;
+  }
+  .radar-note { font-size:12px;color:#A9D0FF; text-align:center; }
+
+  #radar-scan { position:absolute; inset:0; border-radius:50%; pointer-events:none;
+    background: conic-gradient(rgba(219,235,251,0.06) 0deg, rgba(219,235,251,0.12) 30deg, rgba(219,235,251,0) 60deg);
+    animation: rotate 4s linear infinite; mix-blend-mode:screen;
+  }
+  @keyframes rotate { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+
+  /* mobile-friendly */
+  @media (pointer: coarse) {
+    body { flex-direction:column; gap:12px; align-items:stretch; }
+    .player { width:100%; }
+    .radar { width:100%; max-width:100%; }
+    .grid { gap:4px; }
+    button{padding:12px 20px; font-size:18px; border-radius:8px;}
+    .rotate-info{font-size:14px;}
+    .status{font-size:16px;}
+    .radar-container { width:160px; height:160px; }
+    .r-cell{width:10px;height:10px;}
+  }
+</style>
+</head>
+<body>
+
+<!-- Player 1 -->
+<div class="player" id="player1">
+  <div class="panel">
+    <div class="info" id="info1">Гравець №1 — Розстановка</div>
+    <div class="grid" id="grid1" tabindex="0" aria-label="Поле гравця 1"></div>
+    <div class="controls">
+      <button id="auto1">Авто</button>
+      <button id="ready1" disabled>Готово</button>
+      <button id="reset1">Скинути</button>
+    </div>
+    <div class="rotate-info">Натисни клавішу <strong>R</strong> щоб змінити орієнтацію. Клік по кораблю видаляє його для зміни місця.</div>
+    <div class="status" id="status1"></div>
+  </div>
+
+  <!-- Radar for Player 1 -->
+  <div class="radar" id="radar1">
+    <div class="radar-title">Радар (бачить лише потоплені кораблі суперника)</div>
+    <div class="radar-container" id="radar1-container"></div>
+    <div class="radar-note">Радар під гравцем №1 — показує тільки потоплені кораблі гравця №2</div>
+  </div>
+</div>
+
+<!-- Player 2 -->
+<div class="player" id="player2">
+  <div class="panel">
+    <div class="info" id="info2">Гравець №2 — Чекає</div>
+    <div class="grid" id="grid2" tabindex="0" aria-label="Поле гравця 2"></div>
+    <div class="controls">
+      <button id="auto2">Авто</button>
+      <button id="ready2" disabled>Готово</button>
+      <button id="reset2">Скинути</button>
+    </div>
+    <div class="rotate-info">Натисни клавішу <strong>R</strong> щоб змінити орієнтацію. Клік по кораблю видаляє його для зміни місця.</div>
+    <div class="status" id="status2"></div>
+  </div>
+
+  <!-- Radar for Player 2 -->
+  <div class="radar" id="radar2">
+    <div class="radar-title">Радар (бачить лише потоплені кораблі суперника)</div>
+    <div class="radar-container" id="radar2-container"></div>
+    <div class="radar-note">Радар під гравцем №2 — показує тільки потоплені кораблі гравця №1</div>
+  </div>
+</div>
+
+<script>
+/* ========== Налаштування ========== */
+const ROWS = 14, COLS = 14;
+const shipsConfig = [
+  {size:5, count:1},
+  {size:4, count:2},
+  {size:3, count:3},
+  {size:2, count:4},
+  {size:1, count:5}
+];
+
+/* ========== Стан гри ========== */
+function createGrid(){ return Array.from({length:ROWS},()=>Array(COLS).fill(0)); }
+let field1 = createGrid(), field2 = createGrid();
+let ships1 = [], ships2 = []; // each ship: {cells:[{r,c}], hits:Set, size, sunk:false}
+let shipCellMap1 = new Map(), shipCellMap2 = new Map(); // key 'r,c' -> ship index
+let shotsByPlayer = {1: new Set(), 2: new Set()};
+let playerReady = {1:false, 2:false};
+
+let phase = 'placement1'; // placement1 -> placement2 -> showShips -> battle -> finished
+let currentPlayer = 1;
+let orientation = 'H';
+
+/* DOM refs */
+const grid1 = document.getElementById('grid1');
+const grid2 = document.getElementById('grid2');
+const info1 = document.getElementById('info1'), info2 = document.getElementById('info2');
+const status1 = document.getElementById('status1'), status2 = document.getElementById('status2');
+const ready1 = document.getElementById('ready1'), ready2 = document.getElementById('ready2');
+const reset1 = document.getElementById('reset1'), reset2 = document.getElementById('reset2');
+const auto1 = document.getElementById('auto1'), auto2 = document.getElementById('auto2');
+
+const radar1Container = document.getElementById('radar1-container');
+const radar2Container = document.getElementById('radar2-container');
+
+/* ========== Helpers ========== */
+const key = (r,c)=>`${r},${c}`;
+function inBounds(r,c){ return r>=0 && r<ROWS && c>=0 && c<COLS; }
+
+function countPlacedBySize(shipsArr){
+  const counts = new Map();
+  for(const s of shipsArr) {
+    if(!s) continue;
+    counts.set(s.size, (counts.get(s.size)||0)+1);
+  }
+  return counts;
+}
+
+function remainingToPlaceFor(player){
+  const shipsArr = player===1? ships1 : ships2;
+  const placed = countPlacedBySize(shipsArr);
+  const remaining = [];
+  for(const sc of shipsConfig){
+    const placedCnt = placed.get(sc.size) || 0;
+    const left = Math.max(0, sc.count - placedCnt);
+    for(let i=0;i<left;i++) remaining.push(sc.size);
+  }
+  remaining.sort((a,b)=>b-a);
+  return remaining;
+}
+
+/* ========== Placement rules with adjacency prevention ========== */
+function hasAdjacentShip(field, r, c){
+  for(let dr=-1;dr<=1;dr++){
+    for(let dc=-1;dc<=1;dc++){
+      if(dr===0 && dc===0) continue;
+      const rr = r+dr, cc = c+dc;
+      if(inBounds(rr,cc) && field[rr][cc]===1) return true;
+    }
+  }
+  return false;
+}
+
+function canPlace(field, r, c, size, orient){
+  if(orient==='H'){
+    if(c+size>COLS) return false;
+    for(let i=0;i<size;i++){
+      const rr = r, cc = c+i;
+      if(field[rr][cc]!==0) return false;
+      if(hasAdjacentShip(field, rr, cc)) return false;
+    }
+  } else {
+    if(r+size>ROWS) return false;
+    for(let i=0;i<size;i++){
+      const rr = r+i, cc = c;
+      if(field[rr][cc]!==0) return false;
+      if(hasAdjacentShip(field, rr, cc)) return false;
+    }
+  }
+  return true;
+}
+
+function placeShip(field, shipsArr, shipMap, r, c, size, orient){
+  if(!canPlace(field,r,c,size,orient)) return false;
+  const cells = [];
+  const idx = shipsArr.length;
+  for(let i=0;i<size;i++){
+    const rr = orient==='H'? r : r+i;
+    const cc = orient==='H'? c+i : c;
+    field[rr][cc] = 1;
+    cells.push({r:rr,c:cc});
+    shipMap.set(key(rr,cc), idx);
+  }
+  shipsArr.push({cells, hits:new Set(), size, sunk:false});
+  return true;
+}
+
+/* remove ship at coordinate (for manual adjustment). Returns true if found+removed */
+function removeShipAt(field, shipsArr, shipMap, r, c){
+  const k = key(r,c);
+  if(!shipMap.has(k)) return false;
+  const idx = shipMap.get(k);
+  const ship = shipsArr[idx];
+  if(!ship) return false;
+  // clear cells
+  for(const cell of ship.cells){
+    field[cell.r][cell.c] = 0;
+    shipMap.delete(key(cell.r,cell.c));
+  }
+  // mark slot as null so indices remain stable; remainingToPlace will count correctly
+  shipsArr[idx] = null;
+  return true;
+}
+
+/* Check and mark sunk (and mark surrounding cells as miss) */
+function checkAndMarkSunk(ship, field, shipMap){
+  // Check all ship cells are hit (value 3)
+  for(const cell of ship.cells){
+    if(field[cell.r][cell.c] !== 3) return false;
+  }
+  ship.sunk = true;
+  for(const cell of ship.cells){
+    for(let dr=-1; dr<=1; dr++){
+      for(let dc=-1; dc<=1; dc++){
+        const rr = cell.r + dr, cc = cell.c + dc;
+        if(inBounds(rr,cc) && field[rr][cc] === 0){
+          field[rr][cc] = 2; // miss
+        }
+      }
+    }
+  }
+  return true;
+}
+
+/* ========== Rendering ========== */
+function makeEmptyGridDOM(gridEl){
+  gridEl.innerHTML = '';
+  const frag = document.createDocumentFragment();
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<COLS;c++){
+      const div = document.createElement('div');
+      div.className = 'cell water';
+      div.dataset.r = r; div.dataset.c = c;
+      div.title = `(${r},${c})`;
+      frag.appendChild(div);
+    }
+  }
+  gridEl.appendChild(frag);
+}
+
+function updateCell(gridEl, field, r, c, showShips){
+  const idx = r * COLS + c;
+  const cell = gridEl.children[idx];
+  cell.className = 'cell';
+  const val = field[r][c];
+  delete cell.dataset.sunk;
+  if(val===0){
+    cell.classList.add('water'); cell.textContent='';
+  } else if(val===1){
+    if(showShips){
+      cell.classList.add('ship'); cell.textContent='';
+    } else {
+      cell.classList.add('hidden'); cell.textContent='';
+    }
+  } else if(val===2){
+    cell.classList.add('miss'); cell.textContent='o';
+  } else if(val===3){
+    cell.classList.add('hit'); cell.textContent='X';
+  } else {
+    cell.classList.add('water'); cell.textContent='';
+  }
+}
+
+function renderFull(){
+  // showShips = whether to reveal ships to owner (during placement we show owner's ships)
+  const showShips1 = !playerReady[1]; // if not ready, still in placement -> show own ships
+  const showShips2 = !playerReady[2];
+
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<COLS;c++){
+      updateCell(grid1, field1, r, c, showShips1);
+      updateCell(grid2, field2, r, c, showShips2);
+    }
+  }
+
+  // mark sunk style
+  for(const s of ships1){
+    if(!s) continue;
+    if(s.sunk){
+      for(const cell of s.cells){
+        const idx = cell.r * COLS + cell.c;
+        grid1.children[idx].dataset.sunk = '1';
+        grid1.children[idx].classList.add('sunk');
+        grid1.children[idx].textContent = 'X';
+      }
+    } else {
+      for(const cell of s.cells){
+        const idx = cell.r * COLS + cell.c;
+        grid1.children[idx].dataset.sunk = '0';
+      }
+    }
+  }
+  for(const s of ships2){
+    if(!s) continue;
+    if(s.sunk){
+      for(const cell of s.cells){
+        const idx = cell.r * COLS + cell.c;
+        grid2.children[idx].dataset.sunk = '1';
+        grid2.children[idx].classList.add('sunk');
+        grid2.children[idx].textContent = 'X';
+      }
+    } else {
+      for(const cell of s.cells){
+        const idx = cell.r * COLS + cell.c;
+        grid2.children[idx].dataset.sunk = '0';
+      }
+    }
+  }
+
+  // info & buttons by phase
+  if(phase==='placement1'){
+    const rem = remainingToPlaceFor(1);
+    info1.textContent = `Гравець №1 — Розстановка (${rem.length} кораблів)`;
+    info2.textContent = 'Гравець №2 — Чекає';
+    ready1.disabled = rem.length>0;
+    ready2.disabled = true;
+  } else if(phase==='placement2'){
+    const rem = remainingToPlaceFor(2);
+    info1.textContent = 'Гравець №1 — Чекає';
+    info2.textContent = `Гравець №2 — Розстановка (${rem.length} кораблів)`;
+    ready1.disabled = true;
+    ready2.disabled = rem.length>0;
+  } else if(phase==='showShips'){
+    info1.textContent = 'Показ кораблів...';
+    info2.textContent = 'Показ кораблів...';
+    ready1.disabled = true; ready2.disabled = true;
+  } else if(phase==='battle'){
+    info1.textContent = currentPlayer===1 ? 'Гравець №1 — Твій хід' : 'Гравець №1 — Чекає';
+    info2.textContent = currentPlayer===2 ? 'Гравець №2 — Твій хід' : 'Гравець №2 — Чекає';
+    ready1.disabled = true; ready2.disabled = true;
+  } else if(phase==='finished'){
+    info1.textContent = 'Гра завершена';
+    info2.textContent = 'Гра завершена';
+    ready1.disabled = true; ready2.disabled = true;
+  }
+
+  // update radars
+  renderRadars();
+}
+
+/* ========== Initialize grids ========== */
+makeEmptyGridDOM(grid1);
+makeEmptyGridDOM(grid2);
+
+/* ========== Web Worker ========== */
+const workerCode = `
+self.onmessage = function(e){
+  const msg = e.data;
+  if(msg.cmd === 'validate'){
+    const ROWS = msg.ROWS, COLS = msg.COLS;
+    const field = msg.field;
+    function inBounds(r,c){ return r>=0 && r<ROWS && c>=0 && c<COLS; }
+    function hasAdjacentShip(field,r,c){
+      for(let dr=-1;dr<=1;dr++){
+        for(let dc=-1;dc<=1;dc++){
+          if(dr===0 && dc===0) continue;
+          const rr = r+dr, cc = c+dc;
+          if(inBounds(rr,cc) && field[rr][cc]===1) return true;
+        }
+      }
+      return false;
+    }
+    function canPlace(field,r,c,size,orient){
+      if(orient==='H'){
+        if(c+size>COLS) return false;
+        for(let i=0;i<size;i++){
+          const rr=r, cc=c+i;
+          if(field[rr][cc]!==0) return false;
+          if(hasAdjacentShip(field,rr,cc)) return false;
+        }
+      } else {
+        if(r+size>ROWS) return false;
+        for(let i=0;i<size;i++){
+          const rr=r+i, cc=c;
+          if(field[rr][cc]!==0) return false;
+          if(hasAdjacentShip(field,rr,cc)) return false;
+        }
+      }
+      return true;
+    }
+    const ok = canPlace(field,msg.r,msg.c,msg.size,msg.orient);
+    self.postMessage({cmd:'validateResult', ok:ok});
+  } else if(msg.cmd === 'autoPlace'){
+    const ROWS = msg.ROWS, COLS = msg.COLS;
+    const shipsConfig = msg.shipsConfig;
+    function inBounds(r,c){ return r>=0 && r<ROWS && c>=0 && c<COLS; }
+    function hasAdjacent(field,r,c){
+      for(let dr=-1;dr<=1;dr++){
+        for(let dc=-1;dc<=1;dc++){
+          if(dr===0 && dc===0) continue;
+          const rr=r+dr, cc=c+dc;
+          if(inBounds(rr,cc) && field[rr][cc]===1) return true;
+        }
+      }
+      return false;
+    }
+    function canPlace(field,r,c,size,orient){
+      if(orient==='H'){
+        if(c+size>COLS) return false;
+        for(let i=0;i<size;i++){
+          const rr=r, cc=c+i;
+          if(field[rr][cc]!==0) return false;
+          if(hasAdjacent(field,rr,cc)) return false;
+        }
+      } else {
+        if(r+size>ROWS) return false;
+        for(let i=0;i<size;i++){
+          const rr=r+i, cc=c;
+          if(field[rr][cc]!==0) return false;
+          if(hasAdjacent(field,rr,cc)) return false;
+        }
+      }
+      return true;
+    }
+    const field = Array.from({length:ROWS}, ()=> Array(COLS).fill(0));
+    const shipsResult = [];
+    let rng = function(){ return Math.random(); };
+    const sizes = [];
+    shipsConfig.forEach(sc=>{ for(let i=0;i<sc.count;i++) sizes.push(sc.size); });
+    sizes.sort((a,b)=>b-a);
+    for(const size of sizes){
+      let placed=false;
+      for(let attempt=0; attempt<1000 && !placed; attempt++){
+        const orient = (rng() < 0.5) ? 'H' : 'V';
+        const r = Math.floor(rng()*ROWS);
+        const c = Math.floor(rng()*COLS);
+        if(canPlace(field,r,c,size,orient)){
+          const cells=[];
+          for(let i=0;i<size;i++){
+            const rr = orient==='H'? r : r+i;
+            const cc = orient==='H'? c+i : c;
+            field[rr][cc] = 1;
+            cells.push({r:rr,c:cc});
+          }
+          shipsResult.push({cells,size,orient});
+          placed=true;
+        }
+      }
+      if(!placed){
+        self.postMessage({cmd:'autoResult', ok:false});
+        return;
+      }
+    }
+    self.postMessage({cmd:'autoResult', ok:true, ships:shipsResult});
+  }
+};
+`;
+const workerBlob = new Blob([workerCode], {type:'application/javascript'});
+const worker = new Worker(URL.createObjectURL(workerBlob));
+
+function workerValidate(field, r,c,size,orient){
+  return new Promise((resolve)=>{
+    const onmsg = (e)=>{
+      if(e.data && e.data.cmd === 'validateResult'){
+        worker.removeEventListener('message', onmsg);
+        resolve(e.data.ok);
+      }
+    };
+    worker.addEventListener('message', onmsg);
+    worker.postMessage({cmd:'validate', field, r,c,size,orient, ROWS, COLS});
+  });
+}
+
+function workerAutoPlace(shipsConfigLocal){
+  return new Promise((resolve)=>{
+    const onmsg = (e)=>{
+      if(e.data && e.data.cmd === 'autoResult'){
+        worker.removeEventListener('message', onmsg);
+        resolve(e.data);
+      }
+    };
+    worker.addEventListener('message', onmsg);
+    worker.postMessage({cmd:'autoPlace', shipsConfig: shipsConfigLocal, ROWS, COLS});
+  });
+}
+
+/* ========== Placement interaction ========== */
+function handleGridClick(event, player, clientX, clientY){
+  const targetGrid = (player===1)? grid1 : grid2;
+  const rect = targetGrid.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  if(x<0 || y<0 || x>rect.width || y>rect.height) return;
+  const cellW = rect.width / COLS;
+  const cellH = rect.height / ROWS;
+  const c = Math.floor(x / cellW);
+  const r = Math.floor(y / cellH);
+  if(!inBounds(r,c)) return;
+
+  if(phase === `placement${player}`){
+    const field = (player===1)? field1 : field2;
+    const shipsArr = (player===1)? ships1 : ships2;
+    const shipMap = (player===1)? shipCellMap1 : shipCellMap2;
+
+    if(field[r][c] === 1){
+      // Remove ship at this cell (manual adjustment)
+      const removed = removeShipAt(field, shipsArr, shipMap, r, c);
+      if(removed){
+        statusFor(player, `Корабель видалено для зміни розташування.`);
+        renderFull();
+      } else {
+        statusFor(player, `Не вдалось видалити корабель.`);
+      }
+      return;
+    }
+
+    // Place next remaining largest ship by default
+    const remaining = remainingToPlaceFor(player);
+    if(remaining.length === 0){
+      statusFor(player, 'Всі кораблі вже розставлені.');
+      return;
+    }
+    const size = remaining[0]; // pick largest remaining
+    const ok = placeShip(field, shipsArr, shipMap, r, c, size, orientation);
+    if(ok){
+      statusFor(player, '');
+      renderFull();
+    } else {
+      statusFor(player, 'Неможливо розмістити корабель тут (переконайтесь, що не торкається інших).');
+    }
+  }
+}
+
+/* For shooting: clicks on opponent grid */
+function handleShot(event, shooter, clientX, clientY){
+  if(phase !== 'battle') return;
+  if(currentPlayer !== shooter) return;
+  const target = shooter===1? grid2 : grid1;
+  const rect = target.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  if(x<0 || y<0 || x>rect.width || y>rect.height) return;
+  const cellW = rect.width / COLS;
+  const cellH = rect.height / ROWS;
+  const c = Math.floor(x / cellW);
+  const r = Math.floor(y / cellH);
+  if(!inBounds(r,c)) return;
+
+  const opponentField = shooter===1? field2 : field1;
+  const opponentShips = shooter===1? ships2 : ships1;
+  const opponentShipMap = shooter===1? shipCellMap2 : shipCellMap1;
+  const shotsSet = shotsByPlayer[shooter];
+
+  const k = key(r,c);
+  if(shotsSet.has(k)){
+    statusFor(shooter, 'Цю клітинку вже обстріляно!');
+    return;
+  }
+  shotsSet.add(k);
+
+  if(opponentField[r][c] === 1){
+    // hit
+    opponentField[r][c] = 3;
+    const shipIdx = opponentShipMap.get(k);
+    if(typeof shipIdx === 'number'){
+      const ship = opponentShips[shipIdx];
+      if(ship){
+        ship.hits.add(k);
+        const sunk = checkAndMarkSunk(ship, opponentField, opponentShipMap);
+        if(sunk){
+          statusFor(shooter, 'Корабель потоплено!');
+          renderFull();
+          renderRadars(); // Оновлюємо радари негайно після потоплення
+        } else {
+          statusFor(shooter, 'Влучання! Ходи зберігаються.');
+          renderFull();
+        }
+      }
+    }
+    // check victory
+    const relevantShips = opponentShips.filter(Boolean);
+    const allSunk = relevantShips.length>0 && relevantShips.every(s => s.sunk);
+    if(allSunk){
+      phase = 'finished';
+      renderFull();
+      setTimeout(()=>alert(`Гравець №${shooter} переміг!`),100);
+      statusFor(shooter, 'Ви перемогли!');
+      return;
+    }
+    // shooter continues
+  } else {
+    // miss
+    opponentField[r][c] = 2;
+    renderFull();
+    statusFor(shooter, 'Промах. Хід переходить супернику.');
+    currentPlayer = (currentPlayer===1?2:1);
+  }
+}
+
+/* ========== Event binding: pointer / touch / click ========== */
+function bindGridInteractions(gridEl, owner){
+  gridEl.addEventListener('pointerdown', (e)=>{
+    e.preventDefault();
+    if(phase === `placement${owner}`){
+      handleGridClick(e, owner, e.clientX, e.clientY);
+    } else if(phase === 'battle'){
+      if(owner !== currentPlayer){
+        handleShot(e, currentPlayer, e.clientX, e.clientY);
+      } else {
+        showWrongClick(owner);
+      }
+    }
+  }, {passive:false});
+
+  gridEl.addEventListener('click', (e)=>{
+    if(phase === `placement${owner}`){
+      handleGridClick(e, owner, e.clientX, e.clientY);
+    } else if(phase === 'battle'){
+      if(owner !== currentPlayer) handleShot(e, currentPlayer, e.clientX, e.clientY);
+    }
+  });
+
+  gridEl.addEventListener('touchstart', (e)=>{
+    e.preventDefault();
+    const touch = e.changedTouches[0];
+    if(phase === `placement${owner}`) handleGridClick(e, owner, touch.clientX, touch.clientY);
+    else if(phase === 'battle'){
+      if(owner !== currentPlayer) handleShot(e, currentPlayer, touch.clientX, touch.clientY);
+      else showWrongClick(owner);
+    }
+  }, {passive:false});
+}
+
+bindGridInteractions(grid1,1);
+bindGridInteractions(grid2,2);
+
+/* Keyboard rotate */
+window.addEventListener('keydown', (e)=>{
+  if(e.key.toLowerCase() === 'r'){
+    orientation = (orientation==='H')? 'V' : 'H';
+    if(phase.startsWith('placement')) statusAll(`Орієнтація: ${orientation==='H'?'Горизонтальна':'Вертикальна'}`);
+  }
+});
+
+/* status helper */
+function statusFor(player, text){
+  if(player===1) status1.textContent = text;
+  else status2.textContent = text;
+}
+function statusAll(text){
+  status1.textContent = status2.textContent = text;
+}
+
+/* ========== Auto placement (uses Web Worker) ========== */
+async function autoPlaceFor(player){
+  const res = await workerAutoPlace(shipsConfig);
+  if(!res.ok){
+    statusFor(player, 'Авто-розстановка не вдалась. Спробуйте ще раз.');
+    return;
+  }
+  const field = player===1? field1 : field2;
+  const shipsArr = player===1? ships1 : ships2;
+  const shipMap = player===1? shipCellMap1 : shipCellMap2;
+  // clear existing
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++) field[r][c]=0;
+  shipsArr.length = 0;
+  shipMap.clear();
+  // apply new ships
+  for(const s of res.ships){
+    const idx = shipsArr.length;
+    for(const cell of s.cells){
+      field[cell.r][cell.c] = 1;
+      shipMap.set(key(cell.r,cell.c), idx);
+    }
+    shipsArr.push({cells:s.cells, hits:new Set(), size:s.size, sunk:false});
+  }
+  statusFor(player, 'Авто-розстановка завершена. Можете відредагувати (клік по кораблю видаляє його).');
+  renderFull();
+}
+
+/* ========== Ready / Reset handlers ========== */
+ready1.addEventListener('click', ()=>{
+  const rem = remainingToPlaceFor(1);
+  if(rem.length>0){
+    alert('Розставте всі кораблі першого гравця!');
+    return;
+  }
+  playerReady[1] = true;
+  if(playerReady[2]){
+    phase = 'showShips';
+    renderFull();
+    setTimeout(()=>{
+      phase = 'battle';
+      currentPlayer = 1;
+      renderFull();
+    }, 2000);
+  } else {
+    phase = 'placement2';
+    renderFull();
+  }
+});
+
+ready2.addEventListener('click', ()=>{
+  const rem = remainingToPlaceFor(2);
+  if(rem.length>0){
+    alert('Розставте всі кораблі другого гравця!');
+    return;
+  }
+  playerReady[2] = true;
+  if(playerReady[1]){
+    phase = 'showShips';
+    renderFull();
+    setTimeout(()=>{
+      phase = 'battle';
+      currentPlayer = 1;
+      renderFull();
+    }, 2000);
+  } else {
+    phase = 'placement1';
+    renderFull();
+  }
+});
+
+reset1.addEventListener('click', ()=>{
+  field1 = createGrid(); ships1 = []; shipCellMap1 = new Map(); shotsByPlayer[1].clear();
+  playerReady[1] = false; phase='placement1'; orientation='H';
+  makeEmptyGridDOM(grid1);
+  makeEmptyGridDOM(grid2);
+  renderFull();
+});
+reset2.addEventListener('click', ()=>{
+  field2 = createGrid(); ships2 = []; shipCellMap2 = new Map(); shotsByPlayer[2].clear();
+  playerReady[2] = false; phase='placement1'; orientation='H';
+  makeEmptyGridDOM(grid1);
+  makeEmptyGridDOM(grid2);
+  renderFull();
+});
+
+auto1.addEventListener('click', ()=> autoPlaceFor(1));
+auto2.addEventListener('click', ()=> autoPlaceFor(2));
+
+/* ========== Radars implementation (two radars) ========== */
+/* We'll create 14x14 absolute cells inside each circular container.
+   radar1 shows sunk ships of player2 (opponent of player1).
+   radar2 shows sunk ships of player1 (opponent of player2).
+*/
+let radarCells1 = [];
+let radarCells2 = [];
+
+function buildRadars(){
+  radarCells1 = [];
+  radarCells2 = [];
+  function build(container, arr){
+    container.innerHTML = '';
+    const contW = container.clientWidth || 210;
+    // choose cell size so grid fits inside circle area
+    const cellSize = Math.floor(contW / COLS);
+    // container might have a little extra space; compute centered offset
+    const totalW = cellSize * COLS;
+    const offset = Math.floor((contW - totalW) / 2);
+    for(let r=0;r<ROWS;r++){
+      for(let c=0;c<COLS;c++){
+        const el = document.createElement('div');
+        el.className = 'r-cell';
+        el.style.top = (r * cellSize + offset) + 'px';
+        el.style.left = (c * cellSize + offset) + 'px';
+        el.style.width = cellSize + 'px';
+        el.style.height = cellSize + 'px';
+        el.dataset.r = r; el.dataset.c = c;
+        el.textContent = '';
+        container.appendChild(el);
+        arr.push({el, r, c});
+      }
+    }
+    const scan = document.createElement('div');
+    scan.id = 'radar-scan';
+    container.appendChild(scan);
+  }
+
+  if(radar1Container) build(radar1Container, radarCells1);
+  if(radar2Container) build(radar2Container, radarCells2);
+}
+
+buildRadars();
+window.addEventListener('resize', ()=> {
+  // rebuild radars on resize to keep grid aligned
+  buildRadars();
+  renderRadars();
+});
+
+function renderRadars(){
+  // radar1: show sunk cells of player2 only
+  const sunk2 = new Set();
+  for(const s of ships2){
+    if(!s) continue;
+    if(s.sunk){
+      for(const cell of s.cells) sunk2.add(key(cell.r,cell.c));
+    }
+  }
+  for(const rc of radarCells1){
+    const k = key(rc.r, rc.c);
+    if(sunk2.has(k)){
+      rc.el.style.background = '#D14949';
+      rc.el.textContent = '■';
+      rc.el.style.color = '#fff';
+    } else {
+      rc.el.style.background = '#024b86';
+      rc.el.textContent = '';
+    }
+  }
+
+  // radar2: show sunk cells of player1 only
+  const sunk1 = new Set();
+  for(const s of ships1){
+    if(!s) continue;
+    if(s.sunk){
+      for(const cell of s.cells) sunk1.add(key(cell.r,cell.c));
+    }
+  }
+  for(const rc of radarCells2){
+    const k = key(rc.r, rc.c);
+    if(sunk1.has(k)){
+      rc.el.style.background = '#D14949';
+      rc.el.textContent = '■';
+      rc.el.style.color = '#fff';
+    } else {
+      rc.el.style.background = '#024b86';
+      rc.el.textContent = '';
+    }
+  }
+}
+
+/* ========== Small usability: messages ========== */
+function showTempMessage(el, text){
+  const old = el.textContent;
+  el.textContent = text;
+  setTimeout(()=> el.textContent = old, 1800);
+}
+
+function showWrongClick(owner){
+  if(owner===1) showTempMessage(status1, 'Це ваше поле під час бою — стрільба по полю супротивника.');
+  else showTempMessage(status2, 'Це ваше поле під час бою — стрільба по полю супротивника.');
+}
+
+/* ========== Initial render ========== */
+renderFull();
+
+</script>
+</body>
+</html>
